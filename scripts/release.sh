@@ -13,29 +13,14 @@ for key in CFBundleShortVersionString CFBundleVersion; do
   source_value=$(/usr/libexec/PlistBuddy -c "Print $key" Resources/Info.plist)
   [[ "$built" == "$source_value" ]] || { print -u2 "Rebuild the app: $key differs"; exit 1; }
 done
-mkdir -p dist Casks
+if git show-ref --verify --quiet "refs/tags/v${VERSION}" || /usr/bin/grep -Fqx "  version \"$VERSION\"" Casks/barista.rb; then
+  print -u2 "v${VERSION} already has a tag or cask. Bump the version before packaging."
+  exit 1
+fi
+mkdir -p dist
 ARCHIVE="Barista-${VERSION}-macos27-arm64.zip"
 # ditto replaces the archive; never update an old ZIP in place.
 rm -f "dist/$ARCHIVE"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP" "dist/$ARCHIVE"
 (cd dist && /usr/bin/shasum -a 256 "$ARCHIVE" > SHA256SUMS)
 print "Release: ${PWD}/dist/$ARCHIVE"
-read -r digest archive_name < dist/SHA256SUMS
-[[ "$archive_name" == "$ARCHIVE" && ${#digest} == 64 ]]
-cat > Casks/barista.rb <<CASK
-cask "barista" do
-  version "${VERSION}"
-  sha256 "${digest}"
-
-  url "https://github.com/willofi/Barista/releases/download/v#{version}/Barista-#{version}-macos27-arm64.zip"
-  name "Barista"
-  desc "Hide and reveal menu bar items"
-  homepage "https://github.com/willofi/Barista"
-
-  depends_on arch: :arm64
-  depends_on macos: :golden_gate
-
-  app "Barista.app"
-end
-CASK
-print "Updated Casks/barista.rb for v${VERSION}"

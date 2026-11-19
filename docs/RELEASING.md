@@ -8,7 +8,9 @@ zsh scripts/build.sh
 zsh scripts/release.sh
 ```
 
-패키징 스크립트는 최종 ZIP의 SHA-256과 앱 버전으로 `Casks/barista.rb`를 함께 생성합니다. 공증하는 경우 아래 공증 절차까지 마친 후 진행합니다. 소스·버전·변경 기록과 생성된 cask를 함께 커밋합니다. ZIP을 다시 만들면 체크섬도 다시 커밋해야 합니다.
+패키징은 `dist/`에 ZIP과 체크섬을 만듭니다. 이미 태그가 있거나 tap에서 배포 중인 버전은 패키징 단계에서 중단됩니다. 공증하는 경우 아래 티켓 부착과 최종 패키징까지 먼저 마칩니다.
+
+앱 소스·버전·변경 기록을 커밋한 뒤 태그와 릴리스를 게시합니다. 아래 릴리스 노트 경로를 실제 파일로 바꾸세요. 기본 빌드는 ad-hoc 서명 Preview이므로 미공증 안내를 포함합니다.
 
 ```sh
 version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)
@@ -17,11 +19,15 @@ archive="Barista-${version}-macos27-arm64.zip"
 git tag "v${version}"
 git push --atomic origin main "v${version}"
 gh release create "v${version}" "dist/${archive}" dist/SHA256SUMS --verify-tag --prerelease --title "Barista ${version} Preview" --notes-file /path/to/release-notes.md
+```
+
+릴리스 게시가 끝난 뒤 아래 명령을 실행합니다. 스크립트는 공개 URL에서 받은 ZIP의 버전과 SHA-256을 확인한 후 cask를 갱신합니다. 업로드가 실패했으면 같은 태그의 릴리스와 누락된 자산을 먼저 확인하고 이 단계부터 재시도하세요.
+
+```sh
+zsh scripts/update-cask.sh && git add -- Casks/barista.rb && git commit -m "Update Barista cask to ${version}" && git push origin main
 brew update
 brew fetch --force --cask willofi/barista/barista
 ```
-
-릴리스 노트 파일 경로는 실제 작성한 파일로 바꿉니다. 마지막 검증은 README의 최초 설치 안내대로 tap을 등록하고 cask를 신뢰한 환경에서 실행합니다. 게시된 ZIP을 교체할 때는 새 패치 버전으로 배포합니다. 기본 빌드는 ad-hoc 서명이며 공개 릴리즈에 Preview 표시와 미공증 안내를 유지하세요.
 
 Developer ID 인증서가 있는 환경에서는 다음처럼 빌드합니다.
 
