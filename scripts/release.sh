@@ -33,7 +33,7 @@ cask "barista" do
   homepage "https://github.com/willofi/Barista"
 
   depends_on arch: :arm64
-  depends_on macos: ">= :golden_gate"
+  depends_on macos: :golden_gate
 
   app "Barista.app"
 end
