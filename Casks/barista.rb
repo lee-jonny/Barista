@@ -1,6 +1,6 @@
 cask "barista" do
-  version "0.2.2"
-  sha256 "cbe3dd0b2a6bf8b1dde91fa5bf475d2a6a76bd571178444d362abcf711ec6656"
+  version "0.2.3"
+  sha256 "a83f5d6420e6715e5ffc52e13359c247a568dc5a835a6907b6b8401cd52ecb15"
 
   url "https://github.com/willofi/Barista/releases/download/v#{version}/Barista-#{version}-macos27-arm64.zip"
   name "Barista"
