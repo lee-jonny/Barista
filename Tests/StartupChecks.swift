@@ -7,13 +7,15 @@ final class StartupVisibility: MenuVisibilityControlling {
   var configurations: [Set<String>] = []
   var systemConfigurations: [Set<Int>] = []
   var releases = 0
+  var deferCompletion = false
+  var pending: (@MainActor (String?) -> Void)?
   func restrict(
     allowedBundleIDs: Set<String>, hiddenSystemIDs: Set<Int>,
     completion: @escaping @MainActor (String?) -> Void
   ) {
     configurations.append(allowedBundleIDs)
     systemConfigurations.append(hiddenSystemIDs)
-    completion(nil)
+    if deferCompletion { pending = completion } else { completion(nil) }
   }
   func release() { releases += 1 }
 }
@@ -31,11 +33,12 @@ final class StartupLayout: @unchecked Sendable {
   }
   func addSystemIcon() {
     lock.withLock {
+      positions.append(.init(bundleID: "com.apple.MenuBarAgent", x: .nan, systemID: 2))
       positions.append(.init(bundleID: "com.apple.MenuBarAgent", x: -99999, systemID: 6))
     }
   }
   var scans: Int { lock.withLock { scanCount } }
-  func scan(_ candidates: [MenuItemDiscovery.Candidate]) -> [MenuItemPosition] {
+  func scan(_ candidates: [MenuItemDiscovery.Candidate], geometry: MenuBarGeometry) -> [MenuItemPosition] {
     lock.withLock {
       scanCount += 1
       let ids = Set(candidates.map(\.bundleID))
@@ -126,6 +129,20 @@ struct StartupChecks {
     precondition(visibility.systemConfigurations.last == [6], "Late system controls must also be discovered")
     print("PASS: right-side apps stay visible and a late left-side system control is discovered")
 
+    visibility.deferCompletion = true
+    notifications.post(name: NSWorkspace.didLaunchApplicationNotification, object: nil)
+    await settle { visibility.pending != nil }
+    precondition(controller.isApplying && visibility.pending != nil)
+    controller.updateSystemMenuHover(true)
+    visibility.pending?("stale completion")
+    precondition(controller.collapsed && controller.temporarilyShowing && !controller.isApplying)
+    precondition(controller.statusMessage == nil)
+    visibility.deferCompletion = false
+    controller.updateSystemMenuHover(false)
+    await settle { !controller.temporarilyShowing && !controller.isApplying }
+    precondition(controller.collapsed && !controller.temporarilyShowing)
+    print("PASS: hovering cancels an in-flight visibility update and leaving restores it")
+
     controller.setCollapsed(false)
     let expandedCount = visibility.configurations.count
     layout.setLateIcon(x: -99999)
@@ -150,12 +167,14 @@ struct StartupChecks {
     print("PASS: startup arms automatic collapse with existing permission and rebuilds all ready icons")
 
     UserDefaults.standard.set(true, forKey: "autoCollapse")
+    UserDefaults.standard.set(30, forKey: "autoCollapseDelay")
     let emptyLayout = StartupLayout()
     emptyLayout.clearIcons()
     let emptyStartup = makeController(emptyLayout, StartupVisibility())
     app.delegate = emptyStartup
     emptyStartup.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
-    try? await Task.sleep(for: .milliseconds(3300))
+    await settle(timeout: 34) { emptyLayout.scans > 0 && !emptyStartup.isApplying }
+    precondition(emptyLayout.scans > 0)
     precondition(!emptyStartup.collapsed && emptyStartup.statusMessage == nil,
       "An empty startup scan must retry quietly without opening settings")
     precondition(!app.windows.contains { $0.title == "Barista" && $0.isVisible },

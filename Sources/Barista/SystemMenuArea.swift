@@ -9,25 +9,51 @@ final class SystemMenuArea {
   private var queriedAt = Date.distantPast
   private var cachedHiddenSystemIDs: Set<Int> = []
 
-  func contains(_ point: CGPoint, excluding ownItem: CGRect?, hiddenSystemIDs: Set<Int> = [])
+  private var refreshTask: Task<Void, Never>?
+  private let readFrames: @Sendable (Set<Int>, CGFloat) -> [CGRect]
+
+  init(readFrames: @escaping @Sendable (Set<Int>, CGFloat) -> [CGRect] = SystemMenuArea.readFrames) {
+    self.readFrames = readFrames
+  }
+
+  func invalidate() {
+    refreshTask?.cancel()
+    refreshTask = nil
+    cachedRects.removeAll()
+    queriedAt = .distantPast
+  }
+
+  func contains(_ point: CGPoint, excluding ownItem: CGRect?, hiddenSystemIDs: Set<Int> = [],
+    onRefresh: @escaping @MainActor () -> Void = {})
     -> Bool
   {
+    if hiddenSystemIDs != cachedHiddenSystemIDs {
+      cachedHiddenSystemIDs = hiddenSystemIDs
+      invalidate()
+    }
     if ownItem?.insetBy(dx: -4, dy: -4).contains(point) == true { return false }
     // Hidden clock/control-center slots must not act as invisible hover triggers.
     if hiddenSystemIDs.contains(2) && hiddenSystemIDs.contains(8) { return false }
-    if hiddenSystemIDs != cachedHiddenSystemIDs {
-      cachedHiddenSystemIDs = hiddenSystemIDs
-      queriedAt = .distantPast
-    }
     guard
       NSScreen.screens.contains(where: {
         point.y >= $0.frame.maxY - 40 && $0.frame.contains(point)
       })
     else { return false }
-    if Date().timeIntervalSince(queriedAt) > 2 {
-      cachedRects = readFrames(hiddenSystemIDs: hiddenSystemIDs)
-      queriedAt = Date()
+    if refreshTask == nil, Date().timeIntervalSince(queriedAt) > 2,
+      let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero })
+    {
+      let primaryTop = primary.frame.maxY
+      let read = readFrames
+      refreshTask = Task { [weak self] in
+        let frames = await Task.detached(priority: .utility) { read(hiddenSystemIDs, primaryTop) }.value
+        guard !Task.isCancelled, let self else { return }
+        self.cachedRects = frames
+        self.queriedAt = Date()
+        self.refreshTask = nil
+        onRefresh()
+      }
     }
+    guard queriedAt != .distantPast else { return false }
     if !cachedRects.isEmpty {
       return cachedRects.contains { $0.insetBy(dx: -6, dy: -4).contains(point) }
     }
@@ -39,13 +65,11 @@ final class SystemMenuArea {
     }
   }
 
-  private func readFrames(hiddenSystemIDs: Set<Int>) -> [CGRect] {
+  nonisolated private static func readFrames(hiddenSystemIDs: Set<Int>, primaryTop: CGFloat) -> [CGRect] {
     guard
       let agent = NSRunningApplication.runningApplications(
         withBundleIdentifier: "com.apple.MenuBarAgent"
-      ).first,
-      let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero })
-        ?? NSScreen.screens.first
+      ).first
     else { return [] }
     let app = AXUIElementCreateApplication(agent.processIdentifier)
     AXUIElementSetMessagingTimeout(app, 0.15)
@@ -73,12 +97,12 @@ final class SystemMenuArea {
         size.width > 0, size.height > 0
       else { return nil }
       return CGRect(
-        x: origin.x, y: primary.frame.maxY - origin.y - size.height,
+        x: origin.x, y: primaryTop - origin.y - size.height,
         width: size.width, height: size.height)
     }
   }
 
-  private func read(_ item: AXUIElement, _ attribute: String) -> CFTypeRef? {
+  nonisolated private static func read(_ item: AXUIElement, _ attribute: String) -> CFTypeRef? {
     var result: CFTypeRef?
     return AXUIElementCopyAttributeValue(item, attribute as CFString, &result) == .success
       ? result : nil

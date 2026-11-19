@@ -27,7 +27,28 @@ macOS 기본 메뉴 간격을 유지합니다. 다른 앱이 정한 아이콘 �
 
 macOS 27 지원 기기는 [Apple 호환 목록](https://support.apple.com/en-ca/127255)을 참고하세요. 본 프로젝트의 검증 범위는 위 표와 같습니다.
 
-## 설치
+## Homebrew로 설치
+
+Apple Silicon(M 시리즈)과 macOS 27.0 이상이 필요합니다. 새 Mac에서 Homebrew를 설치한 뒤 아래 명령을 실행하세요.
+
+```sh
+brew tap willofi/barista https://github.com/willofi/Barista.git
+brew trust --cask willofi/barista/barista
+brew install --cask willofi/barista/barista
+```
+
+응용 프로그램 폴더에서 Barista를 열고 손쉬운 사용 권한을 허용하세요. 업데이트하려면 Barista 메뉴에서 앱을 종료한 뒤 다음 명령을 실행하고 다시 여세요.
+
+```sh
+brew update
+brew upgrade --cask willofi/barista/barista
+```
+
+다른 Homebrew 패키지와 함께 업데이트할 때는 `brew upgrade`로도 올릴 수 있습니다.
+
+**기존 수동 설치에서 전환하기** — Barista를 종료하고 Finder에서 기존 `/Applications/Barista.app`을 임시 백업 폴더로 옮긴 뒤 위 최초 설치 명령을 실행하세요. 같은 번들 ID를 사용하므로 기존 설정을 그대로 읽습니다. 새 빌드에서 손쉬운 사용 권한을 다시 요구하면 시스템 설정에서 새 앱을 허용하세요.
+
+## 수동 설치
 
 [Releases](https://github.com/willofi/Barista/releases)에서 ZIP을 받아 압축을 풀고 **Barista.app을 /Applications로 이동**한 뒤 실행하세요. 개발 폴더에서 실행했을 때 자기 버튼이 사라지는 현상이 있어 표준 설치 위치를 권장합니다.
 

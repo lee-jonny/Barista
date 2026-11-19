@@ -3,7 +3,7 @@ import AppKit
 @main
 struct LayoutChecks {
   @MainActor
-  static func main() {
+  static func main() async {
     let positions: [MenuItemPosition] = [
       .init(bundleID: "left", x: 100), .init(bundleID: "right", x: 300),
       .init(bundleID: "split", x: 110), .init(bundleID: "split", x: 310),
@@ -84,6 +84,31 @@ struct LayoutChecks {
     precondition(
       SystemItemCatalog.allAllowed.subtracting([6, 8]).contains(63),
       "Unknown system identifiers must remain allowed")
+    let geometry = MenuBarGeometry(toggle: CGRect(x: 700, y: 775, width: 22, height: 25), screens: [
+      CGRect(x: 0, y: 0, width: 1000, height: 800),
+      CGRect(x: -800, y: 0, width: 800, height: 600),
+      CGRect(x: 0, y: 800, width: 1000, height: 600),
+    ])!
+    let offsets = geometry.relativePositions([
+      .init(bundleID: "secondary-left", x: -400, y: 200),
+      .init(bundleID: "secondary-right", x: -100, y: 200),
+      .init(bundleID: "split", x: 50, y: 0),
+      .init(bundleID: "split", x: -100, y: 200),
+      .init(bundleID: "unknown-boundary", x: 50, systemID: 6, y: -600),
+    ], otherToggles: [.init(bundleID: "barista", x: -200, y: 200)])
+    precondition(HiddenSelection.bundleIDs(items: offsets, boundary: 0) == ["secondary-left"])
+    precondition(HiddenSelection.systemIDs(items: offsets, boundary: 0).isEmpty)
+    let screen = NSScreen.screens[0].frame
+    let target = CGPoint(x: screen.midX, y: screen.maxY - 8)
+    let asyncArea = SystemMenuArea { _, _ in
+      precondition(!Thread.isMainThread)
+      return [CGRect(x: target.x, y: target.y, width: 10, height: 8)]
+    }
+    await withCheckedContinuation { continuation in
+      let cached = asyncArea.contains(target, excluding: nil) { continuation.resume() }
+      precondition(!cached)
+    }
+    precondition(asyncArea.contains(target, excluding: nil))
     let systemArea = SystemMenuArea()
     precondition(
       !systemArea.contains(.zero, excluding: nil, hiddenSystemIDs: [2, 8]),

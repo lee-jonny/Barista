@@ -21,7 +21,7 @@ final class MovingLayout: @unchecked Sendable {
   private let lock = NSLock()
   private var moved = false
   func moveAcrossBoundary(_ hidden: Bool = true) { lock.withLock { moved = hidden } }
-  func scan(_ candidates: [MenuItemDiscovery.Candidate]) -> [MenuItemPosition] {
+  func scan(_ candidates: [MenuItemDiscovery.Candidate], geometry: MenuBarGeometry) -> [MenuItemPosition] {
     lock.withLock {
       // The first item is always left. The second crosses the control after dragging.
       [
@@ -40,7 +40,8 @@ struct ReorderChecks {
     let layout = MovingLayout()
     let service = RecordingVisibility()
     let controller = AppDelegate(
-      visibility: service, accessibilityCheck: { true }, scanItems: layout.scan)
+      visibility: service, accessibilityCheck: { true }, scanItems: layout.scan,
+      workspaceNotifications: NotificationCenter())
     app.delegate = controller
     controller.applicationDidFinishLaunching(
       Notification(name: NSApplication.didFinishLaunchingNotification))
@@ -94,12 +95,13 @@ struct ReorderChecks {
     let systemService = RecordingVisibility()
     let systemController = AppDelegate(
       visibility: systemService, accessibilityCheck: { true },
-      scanItems: { _ in
+      scanItems: { _, _ in
         [
           .init(bundleID: "com.apple.MenuBarAgent", x: -100000, systemID: 6),
           .init(bundleID: "com.apple.MenuBarAgent", x: 100000, systemID: 0),
         ]
-      })
+      }, workspaceNotifications: NotificationCenter())
+    systemController.inputBusyOverride = { false }
     app.delegate = systemController
     systemController.applicationDidFinishLaunching(
       Notification(name: NSApplication.didFinishLaunchingNotification))
@@ -156,7 +158,9 @@ struct ReorderChecks {
     let staleService = RecordingVisibility()
     let staleController = AppDelegate(
       visibility: staleService, interactionMonitor: menuMonitor,
-      accessibilityCheck: { true }, scanItems: { _ in [.init(bundleID: "left", x: -100000)] })
+      accessibilityCheck: { true }, scanItems: { _, _ in [.init(bundleID: "left", x: -100000)] },
+      workspaceNotifications: NotificationCenter())
+    staleController.inputBusyOverride = { false }
     app.delegate = staleController
     staleController.applicationDidFinishLaunching(
       Notification(name: NSApplication.didFinishLaunchingNotification))

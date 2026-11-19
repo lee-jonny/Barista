@@ -5,6 +5,43 @@ struct MenuItemPosition: Sendable {
   let bundleID: String
   let x: CGFloat
   var systemID: Int? = nil
+  var y: CGFloat = .nan
+}
+
+/// Screen rectangles in AX coordinates (origin at the primary screen's top left).
+struct MenuBarGeometry: Equatable, Sendable {
+  let displays: [CGRect]
+  let toggleOrigin: CGPoint
+
+  init?(toggle: CGRect, screens: [CGRect]) {
+    guard let primary = screens.first(where: { $0.origin == .zero }),
+      toggle.width > 0, toggle.width < 100,
+      screens.contains(where: { $0.contains(CGPoint(x: toggle.midX, y: toggle.midY)) })
+    else { return nil }
+    displays = screens.map {
+      CGRect(x: $0.minX, y: primary.maxY - $0.maxY, width: $0.width, height: $0.height)
+    }
+    toggleOrigin = CGPoint(x: toggle.minX, y: primary.maxY - toggle.midY)
+  }
+
+  func relativePositions(_ items: [MenuItemPosition], otherToggles: [MenuItemPosition]) -> [MenuItemPosition] {
+    var boundaries: [Int: Set<CGFloat>] = [:]
+    for toggle in otherToggles {
+      if let display = displays.firstIndex(where: { $0.contains(CGPoint(x: toggle.x, y: toggle.y)) }) {
+        boundaries[display, default: []].insert(toggle.x)
+      }
+    }
+    if let display = displays.firstIndex(where: { $0.contains(toggleOrigin) }) {
+      boundaries[display] = [toggleOrigin.x]
+    }
+    return items.map { item in
+      let display = displays.firstIndex { $0.contains(CGPoint(x: item.x, y: item.y)) }
+      let candidates = display.flatMap { boundaries[$0] }
+      let boundary = candidates.flatMap { $0.count == 1 ? $0.first : nil }
+      let offset = boundary.map { item.x - $0 } ?? .nan
+      return MenuItemPosition(bundleID: item.bundleID, x: offset, systemID: item.systemID)
+    }
+  }
 }
 
 enum HiddenSelection {
@@ -128,9 +165,14 @@ enum MenuItemDiscovery {
     return Set(candidates.filter { related.contains($0.bundleID) }.map(\.pid))
   }
 
-  static func scan(_ candidates: [Candidate]) -> [MenuItemPosition] {
+  static func scan(_ candidates: [Candidate], geometry: MenuBarGeometry) -> [MenuItemPosition] {
     guard AXIsProcessTrusted() else { return [] }
-    return ParallelMenuScan.run(candidates, scan: scanCandidate)
+    let items = ParallelMenuScan.run(candidates, scan: scanCandidate)
+    // The app owns one status item. AX may also expose its copies on other displays.
+    let ownItems = geometry.displays.count > 1
+      ? scanCandidate(Candidate(pid: ProcessInfo.processInfo.processIdentifier, bundleID: "dev.eden.barista"))
+      : []
+    return geometry.relativePositions(items, otherToggles: ownItems)
   }
 
   private static func scanCandidate(_ candidate: Candidate) -> [MenuItemPosition] {
@@ -178,7 +220,7 @@ enum MenuItemDiscovery {
       guard AXValueGetValue(unsafeDowncast(value, to: AXValue.self), .cgPoint, &point) else {
         return MenuItemPosition(bundleID: candidate.bundleID, x: .nan, systemID: systemID)
       }
-      return MenuItemPosition(bundleID: candidate.bundleID, x: point.x, systemID: systemID)
+      return MenuItemPosition(bundleID: candidate.bundleID, x: point.x, systemID: systemID, y: point.y)
     }
   }
 }
