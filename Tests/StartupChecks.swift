@@ -183,6 +183,16 @@ struct StartupChecks {
     await settle(timeout: 4) { emptyStartup.collapsed && !emptyStartup.isApplying }
     precondition(emptyStartup.collapsed && emptyStartup.hiddenAppCount == 1,
       "Startup must recover when its first scan had no icons at all")
+    // After the startup recovery, another app launching must not restart empty-layout polling.
+    emptyStartup.setCollapsed(false)
+    emptyLayout.clearIcons()
+    emptyStartup.autoCollapseDelay = .three
+    let previousScans = emptyLayout.scans
+    notifications.post(name: NSWorkspace.didLaunchApplicationNotification, object: nil)
+    await settle(timeout: 5) { emptyLayout.scans > previousScans && !emptyStartup.isApplying }
+    precondition(emptyLayout.scans == previousScans + 1)
+    try? await Task.sleep(for: .milliseconds(3400))
+    precondition(emptyLayout.scans == previousScans + 1, "Normal app launches must not rearm startup retries")
     emptyStartup.autoCollapse = false
     emptyStartup.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
     print("PASS: an empty first startup scan retries and hides the later first icon")

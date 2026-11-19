@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
   }
   @Published var autoCollapse = UserDefaults.standard.bool(forKey: "autoCollapse") {
     didSet {
+      if !autoCollapse { startupDiscoveryDeadline = nil }
       UserDefaults.standard.set(autoCollapse, forKey: "autoCollapse")
       scheduleAutoCollapse()
     }
@@ -61,7 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
   private var loginRefreshTask: Task<Void, Never>?
   private var loginRefreshGeneration = 0
   private var loginVisibilityNeedsUpdate = false
-  private var emptyStartupRetries = 60
+  private var startupDiscoveryDeadline: ContinuousClock.Instant?
 
   init(
     visibility: any MenuVisibilityControlling = MenuVisibilityBridge(),
@@ -103,6 +104,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
   private var layoutRefreshTask: Task<Void, Never>?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    if autoCollapse {
+      startupDiscoveryDeadline = .now + .seconds(autoCollapseDelay.interval + 30)
+    }
     let appMenu = NSMenu()
     let root = NSMenuItem()
     root.submenu = appMenu
@@ -133,7 +137,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
           Task { @MainActor in
             guard let self else { return }
             self.refreshEnvironment()
-            if launched { self.emptyStartupRetries = 60 }
             if self.collapsed || self.isApplying {
               if launched {
                 self.refreshLoginItems(launchedBundleID: changedID, afterLaunch: true)
@@ -218,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
   @objc func toggle() { setCollapsed(isApplying ? false : !collapsed) }
 
   func setCollapsed(_ value: Bool, closeSetupOnSuccess: Bool = false, automatic: Bool = false) {
+    if value && !automatic { startupDiscoveryDeadline = nil }
     guard !value || !collapsed else {
       if closeSetupOnSuccess { helpWindow?.close() }
       return
@@ -281,9 +285,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if automatic {
           // At login there may be no icons yet. Keep startup retries quiet;
           // opening settings here would block every later automatic attempt.
-          if self.emptyStartupRetries > 0 {
-            self.emptyStartupRetries -= 1
-            self.scheduleAutoCollapse(after: 0.5)
+          if let deadline = self.startupDiscoveryDeadline, .now < deadline {
+            self.scheduleAutoCollapse(after: 3)
           }
           return
         }
@@ -291,6 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         self.showHelp()
         return
       }
+      self.startupDiscoveryDeadline = nil
       self.applyRestriction(request: request, closeSetupOnSuccess: closeSetupOnSuccess)
       // An app may have launched before this scan but create its icon later.
       self.refreshLoginItems()

@@ -100,15 +100,17 @@ struct LayoutChecks {
     precondition(HiddenSelection.systemIDs(items: offsets, boundary: 0).isEmpty)
     let screen = NSScreen.screens[0].frame
     let target = CGPoint(x: screen.midX, y: screen.maxY - 8)
+    let corner = CGPoint(x: screen.maxX - 8, y: screen.maxY - 8)
     let asyncArea = SystemMenuArea { _, _ in
       precondition(!Thread.isMainThread)
       return [CGRect(x: target.x, y: target.y, width: 10, height: 8)]
     }
     await withCheckedContinuation { continuation in
-      let cached = asyncArea.contains(target, excluding: nil) { continuation.resume() }
-      precondition(!cached)
+      precondition(asyncArea.contains(corner, excluding: nil) { continuation.resume() },
+        "The first clock interaction must release the restriction while AX is pending")
     }
     precondition(asyncArea.contains(target, excluding: nil))
+    precondition(!asyncArea.contains(corner, excluding: nil), "Measured frames replace the provisional corner")
     let systemArea = SystemMenuArea()
     precondition(
       !systemArea.contains(.zero, excluding: nil, hiddenSystemIDs: [2, 8]),

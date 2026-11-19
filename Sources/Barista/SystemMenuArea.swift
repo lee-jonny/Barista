@@ -53,12 +53,11 @@ final class SystemMenuArea {
         onRefresh()
       }
     }
-    guard queriedAt != .distantPast else { return false }
     if !cachedRects.isEmpty {
       return cachedRects.contains { $0.insetBy(dx: -6, dy: -4).contains(point) }
     }
-    // An AX miss should preserve access to system menus, without making a
-    // normally right-aligned toggle immediately unhide everything itself.
+    // Use the system corner immediately while the first AX query is pending,
+    // and keep it available when AX cannot locate either control.
     return NSScreen.screens.contains { screen in
       CGRect(x: screen.frame.maxX - 180, y: screen.frame.maxY - 40, width: 180, height: 40)
         .contains(point)
