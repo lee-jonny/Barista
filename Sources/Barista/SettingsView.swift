@@ -12,7 +12,14 @@ struct SettingsView: View {
             Image(nsImage: StatusIconStyle.coffeeBean.image(collapsed: true))
               .resizable().frame(width: 36, height: 36).foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 4) {
-              Text("Barista").font(.system(size: 25, weight: .bold))
+              HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Barista").font(.system(size: 25, weight: .bold))
+                if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+                  Text("버전 \(version)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+              }
               Text("필요한 아이콘만 남기고, 나머지는 접어 두세요.")
                 .foregroundStyle(.secondary)
             }
