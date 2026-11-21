@@ -25,7 +25,8 @@ final class LabDelegate: NSObject, NSApplicationDelegate {
             in: CGRect(x: 0, y: 0, width: 1, height: 1))
           print("captureTransport=success pixels=\(image.width)x\(image.height)")
         } catch {
-          print("captureTransport=failed \(error)")
+          FileHandle.standardError.write(Data("captureTransport=failed \(error)\n".utf8))
+          exit(EXIT_FAILURE)
         }
         NSApp.terminate(nil)
       }

@@ -14,7 +14,7 @@ zsh Experiments/OfficialRelease/build-lab.sh
 
 빌드 script는 geometry 계획 검사를 실행하고, capture 선언을 typecheck하고, lab 앱을 `app-sandbox=true` + hardened runtime + ad-hoc 서명한다. 빌드 자체는 GUI trial을 실행하지 않는다. 임시 산출물은 `.build/official-release/`에 있다.
 
-`--diagnose`는 Sandbox container 환경 값, 권한 **preflight**, display 폭만 출력하고 종료한다. 권한을 요청하지 않는다. `--capture-probe`는 preflight가 false면 종료하고 true면 화면 모서리 **1×1 point**만 메모리에 읽고 이미지 크기만 출력한다. 파일이나 픽셀 값을 저장하지 않는다. 실행 호스트의 기존 권한이 영향을 줄 수 있으므로 clean-install TCC 증거로 쓰지 않는다.
+`--diagnose`는 Sandbox container 환경 값, 권한 **preflight**, display 폭만 출력하고 종료한다. 권한을 요청하지 않는다. `--capture-probe`는 preflight가 false면 종료하고 true면 화면 모서리 **1×1 point**만 메모리에 읽고 이미지 크기만 출력한다. 캡처 호출이 실패하면 표준 오류에 원인을 기록하고 종료 코드 1을 반환한다. 파일이나 픽셀 값을 저장하지 않는다. 실행 호스트의 기존 권한이 영향을 줄 수 있으므로 clean-install TCC 증거로 쓰지 않는다.
 
 ## 수동 geometry trial
 
