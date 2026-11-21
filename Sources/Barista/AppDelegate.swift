@@ -27,7 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
   }
   @Published var autoCollapse = UserDefaults.standard.bool(forKey: "autoCollapse") {
     didSet {
-      if !autoCollapse { startupDiscoveryDeadline = nil }
+      if !autoCollapse {
+        startupDiscovery = .finished
+        expandedLaunchRetries.removeAll()
+      }
       UserDefaults.standard.set(autoCollapse, forKey: "autoCollapse")
       scheduleAutoCollapse()
     }
@@ -62,7 +65,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
   private var loginRefreshTask: Task<Void, Never>?
   private var loginRefreshGeneration = 0
   private var loginVisibilityNeedsUpdate = false
-  private var startupDiscoveryDeadline: ContinuousClock.Instant?
+  private enum StartupDiscovery {
+    case waitingForFirstScan, scanning(until: ContinuousClock.Instant), finished
+  }
+  private var startupDiscovery = StartupDiscovery.finished
+  private var expandedLaunchRetries: [String: Int] = [:]
 
   init(
     visibility: any MenuVisibilityControlling = MenuVisibilityBridge(),
@@ -104,9 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
   private var layoutRefreshTask: Task<Void, Never>?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    if autoCollapse {
-      startupDiscoveryDeadline = .now + .seconds(autoCollapseDelay.interval + 30)
-    }
+    startupDiscovery = autoCollapse ? .waitingForFirstScan : .finished
     let appMenu = NSMenu()
     let root = NSMenuItem()
     root.submenu = appMenu
@@ -135,22 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             as? NSRunningApplication)?.bundleIdentifier
           let launched = notification.name == NSWorkspace.didLaunchApplicationNotification
           Task { @MainActor in
-            guard let self else { return }
-            self.refreshEnvironment()
-            if self.collapsed || self.isApplying {
-              if launched {
-                self.refreshLoginItems(launchedBundleID: changedID, afterLaunch: true)
-              } else {
-                if let changedID {
-                  self.pendingLoginItems = self.pendingLoginItems.filter { $0.value.bundleID != changedID }
-                }
-                if self.collapsed && !self.isApplying && !self.temporarilyShowing {
-                  self.applyRestriction()
-                }
-              }
-            } else {
-              self.scheduleAutoCollapse()
-            }
+            self?.workspaceApplicationChanged(bundleID: changedID, launched: launched)
           }
         })
     }
@@ -202,6 +192,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     scheduleAutoCollapse()
   }
 
+  func workspaceApplicationChanged(bundleID changedID: String?, launched: Bool) {
+    refreshEnvironment()
+    if let changedID {
+      if launched && autoCollapse && !collapsed && !ownBundleIDs.contains(changedID) {
+        expandedLaunchRetries[changedID] = 10
+      } else if !launched {
+        expandedLaunchRetries.removeValue(forKey: changedID)
+      }
+    }
+    if collapsed || isApplying {
+      if launched {
+        refreshLoginItems(launchedBundleID: changedID, afterLaunch: true)
+      } else {
+        if let changedID {
+          pendingLoginItems = pendingLoginItems.filter { $0.value.bundleID != changedID }
+        }
+        if collapsed && !isApplying && !temporarilyShowing {
+          applyRestriction()
+        }
+      }
+    } else {
+      scheduleAutoCollapse()
+    }
+  }
+
   @objc private func toggleClicked() {
     let event = NSApp.currentEvent
     if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
@@ -220,8 +235,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
   }
   @objc func toggle() { setCollapsed(isApplying ? false : !collapsed) }
 
-  func setCollapsed(_ value: Bool, closeSetupOnSuccess: Bool = false, automatic: Bool = false) {
-    if value && !automatic { startupDiscoveryDeadline = nil }
+  func setCollapsed(_ value: Bool, closeSetupOnSuccess: Bool = false, automatic: Bool = false,
+    launchedItemsOnly: Bool = false) {
+    if !automatic {
+      if value { startupDiscovery = .finished }
+      expandedLaunchRetries.removeAll()
+    }
     guard !value || !collapsed else {
       if closeSetupOnSuccess { helpWindow?.close() }
       return
@@ -244,7 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
       scheduleAutoCollapse()
       return
     }
-    refreshEnvironment()
+    if launchedItemsOnly { refreshAccessibilityPermission() } else { refreshEnvironment() }
     guard visibility.isAvailable else {
       statusMessage = "이 macOS에서는 간격을 유지하는 숨김 방식이 지원되지 않습니다."
       showHelp()
@@ -260,8 +279,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
       showHelp()
       return
     }
+    if automatic, case .waitingForFirstScan = startupDiscovery {
+      startupDiscovery = .scanning(until: .now + .seconds(30))
+    }
+    var candidates = discoverCandidates(ownBundleIDs)
+    if launchedItemsOnly {
+      candidates = candidates.filter { expandedLaunchRetries[$0.bundleID] != nil }
+      for (id, remaining) in expandedLaunchRetries {
+        expandedLaunchRetries[id] = remaining > 1 ? remaining - 1 : nil
+      }
+      if candidates.isEmpty {
+        if !expandedLaunchRetries.isEmpty { scheduleAutoCollapse(after: 3, launchedItemsOnly: true) }
+        return
+      }
+    }
     isApplying = true
-    let candidates = discoverCandidates(ownBundleIDs)
     activationTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
       Task { @MainActor in
         guard let self, self.requestNumber == request, self.isApplying else { return }
@@ -269,24 +301,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         self.statusMessage = "응답이 지연되어 아이콘을 모두 표시했습니다. 다시 시도해 주세요."
       }
     }
-    Task { @MainActor [weak self] in
+    Task { @MainActor [weak self, candidates] in
       let scanItems = self?.scanItems ?? MenuItemDiscovery.scan
       let items = await Task.detached(priority: .userInitiated) {
         scanItems(candidates, geometry)
       }.value
       guard let self, self.requestNumber == request else { return }
-      self.hiddenIDs = HiddenSelection.bundleIDs(items: items, boundary: 0).subtracting(
+      if automatic && !self.autoCollapse {
+        self.isApplying = false
+        self.activationTimer?.invalidate()
+        return
+      }
+      let selectedApps = HiddenSelection.bundleIDs(items: items, boundary: 0).subtracting(
         self.ownBundleIDs)
-      self.hiddenSystemIDs = HiddenSelection.systemIDs(items: items, boundary: 0)
-      self.hiddenAppCount = self.hiddenIDs.count + self.hiddenSystemIDs.count
-      guard !self.hiddenIDs.isEmpty || !self.hiddenSystemIDs.isEmpty else {
+      let selectedControls = HiddenSelection.systemIDs(items: items, boundary: 0)
+      guard !selectedApps.isEmpty || !selectedControls.isEmpty else {
+        self.hiddenAppCount = 0
         self.isApplying = false
         self.activationTimer?.invalidate()
         if automatic {
           // At login there may be no icons yet. Keep startup retries quiet;
           // opening settings here would block every later automatic attempt.
-          if let deadline = self.startupDiscoveryDeadline, .now < deadline {
+          if case let .scanning(deadline) = self.startupDiscovery, .now < deadline {
             self.scheduleAutoCollapse(after: 3)
+          } else if !self.expandedLaunchRetries.isEmpty {
+            self.scheduleAutoCollapse(after: 3, launchedItemsOnly: true)
           }
           return
         }
@@ -294,7 +333,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         self.showHelp()
         return
       }
-      self.startupDiscoveryDeadline = nil
+      if launchedItemsOnly {
+        // Reclassify the whole layout once before installing the allow list.
+        self.isApplying = false
+        self.setCollapsed(true, automatic: true)
+        return
+      }
+      self.hiddenIDs = selectedApps
+      self.hiddenSystemIDs = selectedControls
+      self.hiddenAppCount = selectedApps.count + selectedControls.count
+      self.startupDiscovery = .finished
+      self.expandedLaunchRetries.removeAll()
       self.applyRestriction(request: request, closeSetupOnSuccess: closeSetupOnSuccess)
       // An app may have launched before this scan but create its icon later.
       self.refreshLoginItems()
@@ -537,7 +586,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
   }
 
-  private func scheduleAutoCollapse(after delay: TimeInterval? = nil) {
+  private func scheduleAutoCollapse(after delay: TimeInterval? = nil, launchedItemsOnly: Bool = false) {
     collapseTimer?.invalidate()
     collapseTimer = nil
     guard autoCollapse, !collapsed, !isApplying, helpWindow?.isVisible != true, accessibilityCheck()
@@ -558,7 +607,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
           self.scheduleAutoCollapse()
           return
         }
-        self.setCollapsed(true, automatic: true)
+        self.setCollapsed(true, automatic: true, launchedItemsOnly: launchedItemsOnly)
       }
     }
   }

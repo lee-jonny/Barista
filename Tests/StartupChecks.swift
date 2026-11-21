@@ -23,7 +23,7 @@ final class StartupVisibility: MenuVisibilityControlling {
 final class StartupLayout: @unchecked Sendable {
   private let lock = NSLock()
   private var positions: [MenuItemPosition] = [.init(bundleID: "early-login-app", x: -100000)]
-  private var scanCount = 0
+  private var scannedBundles: [Set<String>] = []
   func clearIcons() { lock.withLock { positions.removeAll() } }
   func setLateIcon(x: CGFloat?) {
     lock.withLock {
@@ -37,11 +37,12 @@ final class StartupLayout: @unchecked Sendable {
       positions.append(.init(bundleID: "com.apple.MenuBarAgent", x: -99999, systemID: 6))
     }
   }
-  var scans: Int { lock.withLock { scanCount } }
+  var scans: Int { lock.withLock { scannedBundles.count } }
+  func batches(since index: Int) -> [Set<String>] { lock.withLock { Array(scannedBundles.dropFirst(index)) } }
   func scan(_ candidates: [MenuItemDiscovery.Candidate], geometry: MenuBarGeometry) -> [MenuItemPosition] {
     lock.withLock {
-      scanCount += 1
       let ids = Set(candidates.map(\.bundleID))
+      scannedBundles.append(ids)
       return positions.filter { ids.contains($0.bundleID) }
     }
   }
@@ -167,12 +168,20 @@ struct StartupChecks {
     print("PASS: startup arms automatic collapse with existing permission and rebuilds all ready icons")
 
     UserDefaults.standard.set(true, forKey: "autoCollapse")
-    UserDefaults.standard.set(30, forKey: "autoCollapseDelay")
+    UserDefaults.standard.set(3, forKey: "autoCollapseDelay")
     let emptyLayout = StartupLayout()
     emptyLayout.clearIcons()
     let emptyStartup = makeController(emptyLayout, StartupVisibility())
+    var menuOpen = true
+    emptyStartup.interactionBusyOverride = { menuOpen }
     app.delegate = emptyStartup
     emptyStartup.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+    // Keep the first scan pending beyond the original launch-time deadline (3 + 30s).
+    try? await Task.sleep(for: .seconds(4))
+    precondition(emptyLayout.scans == 0)
+    emptyStartup.autoCollapseDelay = .thirty
+    menuOpen = false
+    emptyStartup.refreshInteractionActivity()
     await settle(timeout: 34) { emptyLayout.scans > 0 && !emptyStartup.isApplying }
     precondition(emptyLayout.scans > 0)
     precondition(!emptyStartup.collapsed && emptyStartup.statusMessage == nil,
@@ -193,6 +202,18 @@ struct StartupChecks {
     precondition(emptyLayout.scans == previousScans + 1)
     try? await Task.sleep(for: .milliseconds(3400))
     precondition(emptyLayout.scans == previousScans + 1, "Normal app launches must not rearm startup retries")
+    let beforeLaunch = emptyLayout.scans
+    emptyStartup.workspaceApplicationChanged(bundleID: "com.apple.finder", launched: true)
+    await settle(timeout: 5) { emptyLayout.scans > beforeLaunch && !emptyStartup.isApplying }
+    precondition(emptyLayout.scans == beforeLaunch + 1)
+    emptyLayout.setLateIcon(x: -99999)
+    await settle(timeout: 5) { emptyStartup.collapsed && !emptyStartup.isApplying }
+    precondition(emptyStartup.collapsed && emptyStartup.hiddenAppCount == 1)
+    let batches = emptyLayout.batches(since: beforeLaunch)
+    let allIDs = Set(candidates.map(\.bundleID))
+    precondition(batches.prefix(3).elementsEqual([allIDs, ["com.apple.finder"], allIDs]),
+      "Only the launched app is retried before a final full layout check")
+    print("PASS: a deferred first scan retains its retry window; a late launch retries only the new app")
     emptyStartup.autoCollapse = false
     emptyStartup.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
     print("PASS: an empty first startup scan retries and hides the later first icon")
